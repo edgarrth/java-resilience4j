@@ -1,0 +1,150 @@
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+
+spring:
+  application:
+    name: payment-service
+  threads:
+    virtual:
+      enabled: true
+  main:
+    keep-alive: true
+
+psp:
+  base-url: ${PSP_BASE_URL:http://localhost:8666}
+  connect-timeout: ${PSP_CONNECT_TIMEOUT:500ms}
+  read-timeout: ${PSP_READ_TIMEOUT:5s}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,circuitbreakers,circuitbreakerevents,retries,retryevents,ratelimiters,ratelimiterevents,bulkheads,bulkheadevents,timelimiters,timelimiterevents
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      psp-default:
+        registerHealthIndicator: true
+        allowHealthIndicatorToFail: false
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        slowCallRateThreshold: 50
+        slowCallDurationThreshold: 800ms
+        permittedNumberOfCallsInHalfOpenState: 3
+        maxWaitDurationInHalfOpenState: 5s
+        waitDurationInOpenState: 5s
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        eventConsumerBufferSize: 100
+        writableStackTraceEnabled: true
+        recordExceptions:
+          - pe.axiz.payment.adapter.out.psp.PspTemporaryException
+          - pe.axiz.payment.adapter.out.psp.PspNetworkException
+        ignoreExceptions:
+          - pe.axiz.payment.adapter.out.psp.PspBusinessException
+    instances:
+      pspProgrammaticAttempt:
+        baseConfig: psp-default
+      pspProgrammaticRequest:
+        baseConfig: psp-default
+      pspDeclarative:
+        baseConfig: psp-default
+
+  retry:
+    configs:
+      psp-default:
+        maxAttempts: 3
+        waitDuration: 200ms
+        enableExponentialBackoff: true
+        exponentialBackoffMultiplier: 2.0
+        exponentialMaxWaitDuration: 2s
+        enableRandomizedWait: true
+        randomizedWaitFactor: 0.5
+        eventConsumerBufferSize: 100
+        retryExceptions:
+          - pe.axiz.payment.adapter.out.psp.PspTemporaryException
+          - pe.axiz.payment.adapter.out.psp.PspNetworkException
+        ignoreExceptions:
+          - pe.axiz.payment.adapter.out.psp.PspBusinessException
+    instances:
+      pspProgrammaticAttempt:
+        baseConfig: psp-default
+      pspProgrammaticRequest:
+        baseConfig: psp-default
+      pspDeclarative:
+        baseConfig: psp-default
+
+  ratelimiter:
+    configs:
+      psp-default:
+        registerHealthIndicator: false
+        limitForPeriod: 10
+        limitRefreshPeriod: 1s
+        timeoutDuration: 100ms
+        eventConsumerBufferSize: 100
+    instances:
+      pspProgrammaticAttempt:
+        baseConfig: psp-default
+      pspProgrammaticRequest:
+        baseConfig: psp-default
+      pspDeclarative:
+        baseConfig: psp-default
+
+  bulkhead:
+    configs:
+      psp-default:
+        maxConcurrentCalls: 4
+        maxWaitDuration: 0ms
+        eventConsumerBufferSize: 100
+    instances:
+      pspProgrammaticAttempt:
+        baseConfig: psp-default
+      pspProgrammaticRequest:
+        baseConfig: psp-default
+      pspDeclarative:
+        baseConfig: psp-default
+
+  thread-pool-bulkhead:
+    configs:
+      psp-default:
+        coreThreadPoolSize: 2
+        maxThreadPoolSize: 4
+        queueCapacity: 4
+        keepAliveDuration: 20ms
+        writableStackTraceEnabled: true
+    instances:
+      pspProgrammaticAttempt:
+        baseConfig: psp-default
+      pspProgrammaticRequest:
+        baseConfig: psp-default
+      pspDeclarative:
+        baseConfig: psp-default
+
+  timelimiter:
+    configs:
+      psp-default:
+        timeoutDuration: 1500ms
+        cancelRunningFuture: true
+    instances:
+      pspProgrammaticAttempt:
+        baseConfig: psp-default
+      pspProgrammaticRequest:
+        baseConfig: psp-default
+      pspDeclarative:
+        baseConfig: psp-default
+
+logging:
+  level:
+    root: INFO
+    pe.axiz: INFO

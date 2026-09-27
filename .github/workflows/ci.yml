@@ -1,0 +1,21 @@
+name: build
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Obtener código
+        uses: actions/checkout@v5
+
+      - name: Compilar y ejecutar pruebas con Java 25 y Maven 3.9.16
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            maven:3.9.16-eclipse-temurin-25 \
+            mvn -B verify

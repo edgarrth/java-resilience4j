@@ -1,0 +1,7 @@
+{
+  "paymentId": "11111111-2222-3333-4444-555555555555",
+  "status": "AUTHORIZED",
+  "providerReference": "auth-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "replayed": false,
+  "detail": "Pago autorizado por el PSP"
+}

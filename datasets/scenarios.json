@@ -1,0 +1,72 @@
+[
+  {
+    "name": "healthy",
+    "fixedLatencyMs": 50,
+    "jitterMs": 20,
+    "failFirstCalls": 0,
+    "failureEveryN": 0,
+    "failureRatePercent": 0,
+    "failureStatus": 503,
+    "retryAfterSeconds": 1
+  },
+  {
+    "name": "fail-first-two",
+    "fixedLatencyMs": 80,
+    "jitterMs": 20,
+    "failFirstCalls": 2,
+    "failureEveryN": 0,
+    "failureRatePercent": 0,
+    "failureStatus": 503,
+    "retryAfterSeconds": 1
+  },
+  {
+    "name": "unstable-every-two",
+    "fixedLatencyMs": 100,
+    "jitterMs": 30,
+    "failFirstCalls": 0,
+    "failureEveryN": 2,
+    "failureRatePercent": 0,
+    "failureStatus": 503,
+    "retryAfterSeconds": 1
+  },
+  {
+    "name": "random-40",
+    "fixedLatencyMs": 100,
+    "jitterMs": 50,
+    "failFirstCalls": 0,
+    "failureEveryN": 0,
+    "failureRatePercent": 40,
+    "failureStatus": 503,
+    "retryAfterSeconds": 1
+  },
+  {
+    "name": "slow-2s",
+    "fixedLatencyMs": 2000,
+    "jitterMs": 0,
+    "failFirstCalls": 0,
+    "failureEveryN": 0,
+    "failureRatePercent": 0,
+    "failureStatus": 503,
+    "retryAfterSeconds": 1
+  },
+  {
+    "name": "rate-limited",
+    "fixedLatencyMs": 50,
+    "jitterMs": 0,
+    "failFirstCalls": 1000000,
+    "failureEveryN": 0,
+    "failureRatePercent": 0,
+    "failureStatus": 429,
+    "retryAfterSeconds": 1
+  },
+  {
+    "name": "unavailable",
+    "fixedLatencyMs": 50,
+    "jitterMs": 0,
+    "failFirstCalls": 1000000,
+    "failureEveryN": 0,
+    "failureRatePercent": 0,
+    "failureStatus": 503,
+    "retryAfterSeconds": 1
+  }
+]

@@ -1,0 +1,59 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Circuit Breaker OPEN",
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 0},
+      "targets": [{"expr": "max(resilience4j_circuitbreaker_state{state=\"open\"})", "refId": "A"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "orientation": "auto", "textMode": "auto"}
+    },
+    {
+      "type": "timeseries",
+      "title": "Failure rate por Circuit Breaker",
+      "gridPos": {"h": 8, "w": 16, "x": 8, "y": 0},
+      "targets": [{"expr": "resilience4j_circuitbreaker_failure_rate", "legendFormat": "{{name}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Retries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [{"expr": "resilience4j_retry_calls", "legendFormat": "{{name}} / {{kind}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "TimeLimiter",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [{"expr": "rate(resilience4j_timelimiter_calls_total[1m])", "legendFormat": "{{name}} / {{kind}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Bulkhead disponible",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "targets": [{"expr": "resilience4j_bulkhead_available_concurrent_calls", "legendFormat": "{{name}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "RateLimiter permisos",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "targets": [{"expr": "resilience4j_ratelimiter_available_permissions", "legendFormat": "{{name}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "PSP simulado por resultado",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+      "targets": [{"expr": "rate(psp_simulator_requests_total[1m])", "legendFormat": "{{result}}", "refId": "A"}]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 42,
+  "tags": ["resilience4j", "payments", "axiz"],
+  "templating": {"list": []},
+  "time": {"from": "now-15m", "to": "now"},
+  "timezone": "browser",
+  "title": "Axiz - Payment Resilience",
+  "uid": "axiz-payment-resilience",
+  "version": 1
+}

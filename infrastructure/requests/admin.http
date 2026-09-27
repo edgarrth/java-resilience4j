@@ -1,0 +1,23 @@
+### Estado agregado de los componentes Resilience4j
+GET http://localhost:8080/internal/resilience/snapshot
+
+### Últimos eventos de resiliencia
+GET http://localhost:8080/internal/resilience/events?limit=100
+
+### Estado del simulador
+GET http://localhost:8081/admin/stats
+
+### Escenarios disponibles
+GET http://localhost:8081/admin/scenarios
+
+### Activa un PSP saludable
+POST http://localhost:8081/admin/scenarios/healthy/activate
+
+### Activa dos fallas iniciales para probar Retry
+POST http://localhost:8081/admin/scenarios/fail-first-two/activate
+
+### Activa caída sostenida
+POST http://localhost:8081/admin/scenarios/unavailable/activate
+
+### Reset de métricas/datos de prueba del PSP
+POST http://localhost:8081/admin/reset

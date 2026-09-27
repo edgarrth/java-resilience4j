@@ -1,0 +1,5 @@
+{"idempotencyKey":"dataset-payment-001","merchantId":"merchant-lima-01","amount":49.90,"currency":"PEN"}
+{"idempotencyKey":"dataset-payment-002","merchantId":"merchant-lima-01","amount":129.00,"currency":"PEN"}
+{"idempotencyKey":"dataset-payment-003","merchantId":"merchant-lima-02","amount":18.50,"currency":"USD"}
+{"idempotencyKey":"dataset-payment-004","merchantId":"merchant-lima-02","amount":349.90,"currency":"PEN"}
+{"idempotencyKey":"dataset-payment-005","merchantId":"merchant-lima-03","amount":25.00,"currency":"USD"}

@@ -1,0 +1,9 @@
+[
+  {
+    "name": "psp",
+    "listen": "0.0.0.0:8666",
+    "upstream": "host.docker.internal:8081",
+    "enabled": true,
+    "toxics": []
+  }
+]
