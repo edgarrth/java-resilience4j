@@ -36,7 +36,7 @@ El proyecto está fijado a versiones actuales y compatibles con el objetivo de J
 | Tecnología | Versión usada |
 | --- | --- |
 | Java | 25 |
-| Maven | 3.9.16 |
+| Maven | 3.9.x (3.9.16 recomendado y usado en CI) |
 | Spring Boot | 4.1.1 |
 | Spring Framework | 7.0.9, administrado por Spring Boot 4.1.1 |
 | Resilience4j | 2.4.0 |
@@ -46,7 +46,7 @@ El proyecto está fijado a versiones actuales y compatibles con el objetivo de J
 | Grafana | 13.2.2 |
 | Toxiproxy | 2.12.0 |
 
-El `pom.xml` raíz usa Maven Enforcer para rechazar una ejecución que no esté en Java 25 y Maven 3.9.16+. Resilience4j se versiona explícitamente porque la integración usada es la específica para Spring Boot 4.
+El `pom.xml` raíz usa Maven Enforcer para exigir Java 25 y Maven 3.9.x. No fijo el patch local de Maven porque Spring Boot 4.1.1 soporta Maven 3.6.3 o superior y los plugins Maven actuales mantienen compatibilidad con Maven 3.9.x. Para tener un build reproducible, el script de verificación y el CI sí usan Maven 3.9.16. Resilience4j se versiona explícitamente porque la integración usada es la específica para Spring Boot 4.
 
 ## 3. Caso de uso funcional
 
@@ -318,7 +318,7 @@ Para correr todo desde el IDE:
 
 ```text
 JDK 25
-Maven 3.9.16 o superior dentro de la rama 3.9.x
+Maven 3.9.x; recomiendo 3.9.16, pero 3.9.0 o superior dentro de la rama 3.9.x es aceptado por el proyecto
 Docker con Docker Compose v2
 curl
 ```
@@ -355,7 +355,7 @@ Grafana
 
 Prometheus apunta a los servicios que se ejecutan desde el IDE en el host.
 
-Grafana queda en `http://localhost:3000` con usuario `admin` y password `admin`. El datasource y el dashboard `Axiz - Payment Resilience` se provisionan automáticamente.
+Grafana queda en `http://localhost:3000` con usuario `admin` y password `admin`. El datasource y el dashboard `Axiz - Payment Resilience` se provisionan automáticamente. Se deshabilita la preinstalación automática de plugins porque esta PoC solo necesita las capacidades incluidas para consultar Prometheus; también existen directorios vacíos de provisioning para `plugins` y `alerting` para evitar errores de arranque innecesarios en el log.
 
 ## 13. Ejecutar los servicios
 
