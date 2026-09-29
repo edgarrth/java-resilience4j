@@ -1,12 +1,14 @@
-# Resilience4j Advanced Payment Processing PoC
+# Resilience4j - Payment Processing
 
-Esta PoC la armé para probar resiliencia de verdad sobre un flujo de autorización de pagos. No es un ejemplo de `@CircuitBreaker` aislado: la idea es poder provocar fallas HTTP y de red, comparar órdenes de composición, saturar recursos, observar métricas y validar cómo se recupera el servicio.
+PoC de resiliencia sobre un flujo de autorización de pagos. No es un ejemplo de `@CircuitBreaker` aislado.
+la idea es poder provocar fallas HTTP y de red, comparar órdenes de composición, saturar recursos, observar métricas y validar cómo se 
+recupera el servicio.
 
-El servicio principal es un microservicio REST con DDD + arquitectura hexagonal. El PSP externo está simulado en un segundo módulo para poder controlar sus fallas. Toxiproxy queda entre ambos cuando quiero introducir problemas de red reales.
+El servicio principal es un microservicio REST con DDD + arquitectura hexagonal. El PSP externo está simulado en un segundo módulo 
+para poder controlar sus fallas. Toxiproxy queda entre ambos cuando quiero introducir problemas de red reales.
 
-## 1. Qué quiero demostrar
+## Capacidades
 
-La parte importante del repositorio es el comportamiento técnico de Resilience4j:
 
 | Capacidad | Qué pruebo en la PoC |
 | --- | --- |
@@ -27,7 +29,6 @@ La parte importante del repositorio es el comportamiento técnico de Resilience4
 | Virtual Threads | El servicio usa virtual threads para trabajo bloqueante y el scheduler de timeouts queda separado |
 | Idempotencia | Todos los retries reutilizan el mismo `Idempotency-Key`; el PSP no crea dos autorizaciones para la misma clave y rechaza la clave reutilizada con otros datos |
 
-No uso PostgreSQL, Kafka, MongoDB, Neo4j, Qdrant, KurrentDB, InfluxDB ni Drools porque ninguno es necesario para demostrar este caso técnico. Meterlos haría la PoC más grande sin mejorar la prueba de resiliencia. Tampoco uso Flyway porque no existe una base de datos que versionar.
 
 ## 2. Stack y versiones
 
@@ -46,13 +47,16 @@ El proyecto está fijado a versiones actuales y compatibles con el objetivo de J
 | Grafana | 13.2.2 |
 | Toxiproxy | 2.12.0 |
 
-El `pom.xml` raíz usa Maven Enforcer para exigir Java 25 y Maven 3.9.x. No fijo el patch local de Maven porque Spring Boot 4.1.1 soporta Maven 3.6.3 o superior y los plugins Maven actuales mantienen compatibilidad con Maven 3.9.x. Para tener un build reproducible, el script de verificación y el CI sí usan Maven 3.9.16. Resilience4j se versiona explícitamente porque la integración usada es la específica para Spring Boot 4.
+El `pom.xml` raíz usa Maven Enforcer para exigir Java 25 y Maven 3.9.x. No fijo el patch local de Maven porque Spring Boot 4.1.1 
+soporta Maven 3.6.3 o superior y los plugins Maven actuales mantienen compatibilidad con Maven 3.9.x. Para tener un build reproducible, el script de verificación y el CI sí usan Maven 3.9.16. Resilience4j se versiona explícitamente porque la integración usada es la específica para Spring Boot 4.
 
 ## 3. Caso de uso funcional
 
-El cliente solicita una autorización de pago. `payment-service` crea el agregado de pago y llama al PSP externo usando una clave de idempotencia proporcionada por el cliente.
+El cliente solicita una autorización de pago. `payment-service` crea el agregado de pago y llama al PSP externo usando una clave 
+de idempotencia proporcionada por el cliente.
 
-El PSP puede estar saludable, lento, responder 429/503, fallar algunas veces o quedar inaccesible. La PoC aplica las políticas de resiliencia y devuelve:
+El PSP puede estar saludable, lento, responder 429/503, fallar algunas veces o quedar inaccesible. La PoC aplica las políticas de 
+resiliencia y devuelve:
 
 - `200 AUTHORIZED` únicamente cuando existe confirmación del PSP.
 - `422 REJECTED` cuando el PSP rechaza la operación por negocio (4xx). Es una respuesta válida del proveedor: no se reintenta ni pasa por el fallback.
@@ -60,7 +64,8 @@ El PSP puede estar saludable, lento, responder 429/503, fallar algunas veces o q
 - `503 NOT_PROCESSED` cuando el fallback se activa y existe certeza de que el PSP no procesó el pago: Circuit Breaker abierto, Bulkhead lleno, cuota agotada, conexión rechazada o errores 429/5xx explícitos del PSP.
 - `202 UNKNOWN` cuando el fallback se activa pero la llamada pudo llegar al PSP: el TimeLimiter venció con un intento en vuelo o la conexión se cortó después de enviar el request. El PSP puede autorizar después de que el cliente recibió la respuesta, así que el sistema no afirma ni niega el cobro. El estado final se obtiene reenviando el mismo request con la misma `Idempotency-Key`.
 
-La idempotencia es parte central del ejemplo: un retry no genera un nuevo intento lógico de cobro. Todas las llamadas físicas del mismo request conservan el mismo `Idempotency-Key`, y el `paymentId` se deriva de esa clave para que un reintento del cliente apunte al mismo pago lógico.
+La idempotencia es parte central del ejemplo: un retry no genera un nuevo intento lógico de cobro. Todas las llamadas físicas del 
+mismo request conservan el mismo `Idempotency-Key`, y el `paymentId` se deriva de esa clave para que un reintento del cliente apunte al mismo pago lógico.
 
 ## 4. Arquitectura
 
@@ -91,7 +96,8 @@ flowchart LR
     PR --> G[Grafana :3000]
 ```
 
-Para ejecutar desde el IDE, `payment-service` apunta por defecto a `http://localhost:8666`, que es el puerto expuesto por Toxiproxy. Toxiproxy reenvía al PSP que corre en el host por `8081`.
+`payment-service` apunta por defecto a `http://localhost:8666`, que es el puerto expuesto por Toxiproxy. 
+Toxiproxy reenvía al PSP que corre en el host por `8081`.
 
 ## 5. DDD y arquitectura hexagonal
 
@@ -119,7 +125,8 @@ payment-service
     └── resilience
 ```
 
-`ProcessPaymentUseCase` es el puerto de entrada. `PaymentProviderPort` es el puerto de salida. Las dos implementaciones del puerto son `ProgrammaticPspAdapter` y `DeclarativePspAdapter`; el dominio no sabe que existe Resilience4j ni HTTP.
+`ProcessPaymentUseCase` es el puerto de entrada. `PaymentProviderPort` es el puerto de salida. Las dos implementaciones del 
+puerto son `ProgrammaticPspAdapter` y `DeclarativePspAdapter`; el dominio no sabe que existe Resilience4j ni HTTP.
 
 ## 6. Estructura del repositorio
 
@@ -162,9 +169,11 @@ PER_REQUEST
 Fallback(TimeLimiter(CircuitBreaker(Retry(Bulkhead(RateLimiter(PSP))))))
 ```
 
-En ambos casos el Rate Limiter está dentro de Retry para que cada intento físico consuma permiso del proveedor. Eso evita que un request con tres retries se contabilice falsamente como un solo uso de cuota.
+En ambos casos el Rate Limiter está dentro de Retry para que cada intento físico consuma permiso del proveedor. Eso evita que 
+un request con tres retries se contabilice falsamente como un solo uso de cuota.
 
-El orden es el mismo con `isolation=SEMAPHORE` y con `isolation=THREAD_POOL`; solo cambia la implementación del eslabón `Bulkhead`. Con `ThreadPoolBulkhead` cada intento físico toma un hilo del pool y lo libera al terminar, así que la espera del backoff no ocupa hilos del pool.
+El orden es el mismo con `isolation=SEMAPHORE` y con `isolation=THREAD_POOL`; solo cambia la implementación del eslabón `Bulkhead`. 
+Con `ThreadPoolBulkhead` cada intento físico toma un hilo del pool y lo libera al terminar, así que la espera del backoff no ocupa hilos del pool.
 
 Cada request lógico crea un `PspInvocation` que comparten todos sus intentos físicos. Cumple dos funciones:
 
@@ -347,8 +356,6 @@ También dejé requests para IntelliJ/VS Code en `infrastructure/requests/` y ej
 
 ## 11. Requisitos
 
-Para correr todo desde el IDE:
-
 ```text
 JDK 25
 Maven 3.9.x; recomiendo 3.9.16, pero 3.9.0 o superior dentro de la rama 3.9.x es aceptado por el proyecto
@@ -375,9 +382,6 @@ Desde la raíz:
 cd infrastructure
 docker compose up
 ```
-
-No uso `-d` para que se pueda ver el estado de la infraestructura mientras hago las pruebas. Tampoco configuré health checks HTTP periódicos en Docker Compose, así que los logs no quedan llenándose con requests de liveness.
-
 La infraestructura levanta solamente:
 
 ```text
@@ -573,15 +577,15 @@ done
 curl http://localhost:8080/internal/resilience/snapshot
 ```
 
-Qué estoy comprobando: luego del mínimo de llamadas y con failure rate suficiente, el breaker pasa a `OPEN` y empieza a rechazar sin tocar el PSP.
+Prueba: luego del mínimo de llamadas y con failure rate suficiente, el breaker pasa a `OPEN` y empieza a rechazar sin tocar el PSP.
 
-Ahora recupero el PSP:
+Ahora recupera el PSP:
 
 ```bash
 curl -X POST http://localhost:8081/admin/scenarios/healthy/activate
 ```
 
-Espero algo más de 5 segundos y envío tres pagos nuevos. El breaker tiene permiso para probar el backend en `HALF_OPEN`; si las llamadas salen bien vuelve a `CLOSED`.
+Espera algo más de 5 segundos y envío tres pagos nuevos. El breaker tiene permiso para probar el backend en `HALF_OPEN`; si las llamadas salen bien vuelve a `CLOSED`.
 
 ### Test 5: slow calls y TimeLimiter
 
@@ -598,7 +602,7 @@ curl -i -X POST \
   -d '{"merchantId":"merchant-demo","amount":20.00,"currency":"PEN"}'
 ```
 
-Qué estoy comprobando: el TimeLimiter está en 1500 ms y el PSP tarda 2 s. El cliente recibe `202 UNKNOWN`: no devuelvo una autorización falsa, pero tampoco afirmo que el pago no se procesó.
+Prueba: el TimeLimiter está en 1500 ms y el PSP tarda 2 s. El cliente recibe `202 UNKNOWN`: no devuelvo una autorización falsa, pero tampoco afirmo que el pago no se procesó.
 
 Pasados 2 segundos reviso el PSP:
 
@@ -640,7 +644,7 @@ seq 1 25 | xargs -P 25 -I {} curl -s -o /dev/null -w '%{http_code}\n' \
   -d '{"merchantId":"merchant-demo","amount":10.00,"currency":"PEN"}'
 ```
 
-Qué estoy comprobando: con 10 permisos/segundo y 100 ms de espera, parte del burst debe ser rechazado/protegido en lugar de dejar crecer una cola sin límite. La cuota es la misma para todas las modalidades: si durante el burst también llegan pagos por `PER_ATTEMPT` o por el endpoint declarativo, consumen de `pspProvider` (`providerRateLimiter` en el snapshot).
+Prueba: con 10 permisos/segundo y 100 ms de espera, parte del burst debe ser rechazado/protegido en lugar de dejar crecer una cola sin límite. La cuota es la misma para todas las modalidades: si durante el burst también llegan pagos por `PER_ATTEMPT` o por el endpoint declarativo, consumen de `pspProvider` (`providerRateLimiter` en el snapshot).
 
 ### Test 7: Semaphore Bulkhead
 
@@ -656,7 +660,7 @@ seq 1 12 | xargs -P 12 -I {} curl -s -o /dev/null -w '%{http_code}\n' \
   -d '{"merchantId":"merchant-demo","amount":10.00,"currency":"PEN"}'
 ```
 
-Qué estoy comprobando: solo 4 ejecuciones pueden ocupar el segmento protegido a la vez. El resto falla rápido por `BulkheadFullException` y termina en `503 NOT_PROCESSED`, porque nunca salió al PSP. Las 4 que entraron vencen el TimeLimiter con la llamada en vuelo y responden `202 UNKNOWN`.
+Prueba: solo 4 ejecuciones pueden ocupar el segmento protegido a la vez. El resto falla rápido por `BulkheadFullException` y termina en `503 NOT_PROCESSED`, porque nunca salió al PSP. Las 4 que entraron vencen el TimeLimiter con la llamada en vuelo y responden `202 UNKNOWN`.
 
 ### Test 8: ThreadPool Bulkhead
 
@@ -695,7 +699,7 @@ curl -i -X POST \
   -d '{"merchantId":"merchant-demo","amount":10.00,"currency":"PEN"}'
 ```
 
-Qué estoy comprobando: 429 se considera temporal, participa de Retry y del Circuit Breaker.
+Prueba: 429 se considera temporal, participa de Retry y del Circuit Breaker.
 
 ### Test 10: latencia real de red con Toxiproxy
 
@@ -706,7 +710,7 @@ curl -X POST http://localhost:8081/admin/scenarios/healthy/activate
 ./infrastructure/scripts/network-latency.sh 1200 100
 ```
 
-Ejecuto un pago y reviso eventos/métricas. La latencia no está dentro del PSP: Toxiproxy la agrega en el trayecto TCP.
+Se ejecuta un pago y revisa eventos/métricas. La latencia no está dentro del PSP: Toxiproxy la agrega en el trayecto TCP.
 
 Limpio:
 
@@ -720,7 +724,7 @@ Limpio:
 ./infrastructure/scripts/network-timeout.sh 4000
 ```
 
-Ejecuto un pago normal. El TimeLimiter debe terminar antes de que el enlace entregue la respuesta. El resultado es `202 UNKNOWN`: desde el cliente no hay forma de saber si el request llegó al PSP.
+Se ejecuta un pago normal. El TimeLimiter debe terminar antes de que el enlace entregue la respuesta. El resultado es `202 UNKNOWN`: desde el cliente no hay forma de saber si el request llegó al PSP.
 
 ```bash
 ./infrastructure/scripts/network-reset.sh
@@ -732,7 +736,7 @@ Ejecuto un pago normal. El TimeLimiter debe terminar antes de que el enlace entr
 ./infrastructure/scripts/network-reset-peer.sh 0
 ```
 
-Ejecuto un pago y verifico que el error de transporte se clasifica como falla de red y es elegible para Retry. Como la conexión se establece y se corta después, el resultado final es `202 UNKNOWN`.
+Se ejecuta un pago y verifico que el error de transporte se clasifica como falla de red y es elegible para Retry. Como la conexión se establece y se corta después, el resultado final es `202 UNKNOWN`.
 
 ```bash
 ./infrastructure/scripts/network-reset.sh
@@ -744,7 +748,7 @@ Ejecuto un pago y verifico que el error de transporte se clasifica como falla de
 ./infrastructure/scripts/network-down.sh
 ```
 
-Hago varios pagos con claves diferentes y observo Retry + Circuit Breaker. Aquí la conexión se rechaza, así que hay certeza de que el request no salió y la respuesta es `503 NOT_PROCESSED`. Luego recupero el proxy:
+Se hace varios pagos con claves diferentes y observo Retry + Circuit Breaker. Aquí la conexión se rechaza, así que hay certeza de que el request no salió y la respuesta es `503 NOT_PROCESSED`. Luego recupero el proxy:
 
 ```bash
 ./infrastructure/scripts/network-up.sh
@@ -793,7 +797,7 @@ curl -i -X POST \
   -d '{"merchantId":"merchant-demo","amount":30.00,"currency":"PEN"}'
 ```
 
-Qué estoy comprobando: el mismo problema se resuelve con annotations/AOP. Para experimentar con órdenes arbitrarios prefiero el endpoint programático porque el chain queda explícito en código.
+Prueba: el mismo problema se resuelve con annotations/AOP. Para experimentar con órdenes arbitrarios prefiero el endpoint programático porque el chain queda explícito en código.
 
 ### Test 16: Cache de capacidades del PSP
 
@@ -811,7 +815,7 @@ curl http://localhost:8080/api/v1/payments/provider-capabilities
 curl http://localhost:8080/api/v1/payments/provider-capabilities/cache-metrics
 ```
 
-Qué estoy comprobando: la primera llamada es miss y consulta el PSP; la segunda reutiliza el valor. El campo `generatedAt` permite ver que la respuesta es la misma. Este patrón está limitado a metadata que tolera staleness.
+Prueba: la primera llamada es miss y consulta el PSP; la segunda reutiliza el valor. El campo `generatedAt` permite ver que la respuesta es la misma. Este patrón está limitado a metadata que tolera staleness.
 
 ### Test 17: rechazo de negocio
 
@@ -828,7 +832,7 @@ curl http://localhost:8081/admin/stats
 curl http://localhost:8080/internal/resilience/snapshot
 ```
 
-Qué estoy comprobando: el PSP responde `402` y el cliente recibe `422 REJECTED`, no `503`. Hay una sola llamada física porque un rechazo de negocio no se reintenta, y el Circuit Breaker no registra fallas: el PSP está sano, solo rechazó el pago.
+Prueba: el PSP responde `402` y el cliente recibe `422 REJECTED`, no `503`. Hay una sola llamada física porque un rechazo de negocio no se reintenta, y el Circuit Breaker no registra fallas: el PSP está sano, solo rechazó el pago.
 
 ### Test 18: misma clave con otros datos
 
@@ -848,7 +852,7 @@ curl -i -X POST \
 curl http://localhost:8081/admin/authorizations
 ```
 
-Qué estoy comprobando: el primer request autoriza 10.00. El segundo reutiliza la clave con 500.00 y recibe `409 IDEMPOTENCY_CONFLICT` en lugar de la autorización de 10.00. Ambos responden el mismo `paymentId` porque se deriva de la clave. Un reenvío idéntico al primero sí devuelve `200 AUTHORIZED` con `replayed=true`.
+Prueba: el primer request autoriza 10.00. El segundo reutiliza la clave con 500.00 y recibe `409 IDEMPOTENCY_CONFLICT` en lugar de la autorización de 10.00. Ambos responden el mismo `paymentId` porque se deriva de la clave. Un reenvío idéntico al primero sí devuelve `200 AUTHORIZED` con `replayed=true`.
 
 ## 16. Observabilidad
 
@@ -956,14 +960,6 @@ Ejecución:
 mvn clean verify
 ```
 
-Si no quiero depender del JDK/Maven instalado localmente, dejé una verificación reproducible con Docker:
-
-```bash
-./scripts/verify-build.sh
-```
-
-Ese script usa `maven:3.9.16-eclipse-temurin-25` y ejecuta `mvn -B clean verify` dentro del contenedor.
-
 También existe CI en `.github/workflows/ci.yml` usando Temurin 25 y Maven.
 
 ## 18. Build de imágenes de los módulos
@@ -976,21 +972,3 @@ Si quiero construir una imagen:
 docker build -f payment-service/Dockerfile -t axiz/payment-service:local .
 docker build -f psp-simulator/Dockerfile -t axiz/psp-simulator:local .
 ```
-
-## 19. Decisiones que mantendría en un servicio real
-
-- La idempotencia tendría almacenamiento durable y una política explícita de expiración; en esta PoC es memoria para no agregar una base que no aporta al objetivo técnico.
-- Circuit Breaker, Retry y timeout se calibran con SLOs y métricas reales, no copiando los números de esta demo.
-- No reintento errores de negocio.
-- Un retry de una operación de pago siempre conserva la misma clave idempotente.
-- El fallback nunca devuelve `AUTHORIZED` por inferencia, y tampoco `NOT_PROCESSED` cuando la llamada pudo llegar al PSP: en ese caso responde `UNKNOWN` y el estado se resuelve consultando con la misma clave. En un servicio real, ese estado quedaría persistido y un proceso de reconciliación lo cerraría.
-- Un rechazo de negocio del PSP es una respuesta, no una falla: no pasa por el fallback ni degrada el Circuit Breaker.
-- Ningún reintento sale al proveedor después de que el cliente ya recibió respuesta.
-- El Rate Limiter considera llamadas físicas, no solo requests lógicos, y hay uno por proveedor: la cuota no se multiplica por cada variante de código que lo invoca.
-- Un Bulkhead se dimensiona por dependencia; no compartiría el mismo pool entre proveedores no relacionados.
-- Cache solo se usa para datos que toleran staleness. No se usa como mecanismo de idempotencia.
-- La observabilidad de los componentes forma parte de la implementación, no se deja para el final.
-
-## 20. Qué no pretende resolver esta PoC
-
-No es un payment engine completo. No incluye ledger, conciliación, settlement, antifraude, persistencia, outbox ni mensajería porque desviarían el foco. El caso funcional existe para que las decisiones de resiliencia tengan consecuencias reales, pero el objetivo del repositorio es poder estudiar y comparar patrones de fault tolerance de forma reproducible.
