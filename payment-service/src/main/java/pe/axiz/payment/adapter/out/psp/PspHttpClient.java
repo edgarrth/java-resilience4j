@@ -1,5 +1,8 @@
 package pe.axiz.payment.adapter.out.psp;
 
+import java.net.ConnectException;
+import java.net.UnknownHostException;
+import java.net.http.HttpConnectTimeoutException;
 import java.util.Objects;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
@@ -29,7 +32,8 @@ public class PspHttpClient {
                     .body(PspCapabilitiesResponse.class);
             return Objects.requireNonNull(response, "El PSP respondió sin capacidades");
         } catch (ResourceAccessException exception) {
-            throw new PspNetworkException("No fue posible consultar las capacidades del PSP", exception);
+            throw new PspNetworkException(
+                    "No fue posible consultar las capacidades del PSP", requestMayHaveReachedPsp(exception), exception);
         } catch (RestClientException exception) {
             throw new PspTemporaryException("Falló la consulta de capacidades del PSP", exception);
         }
@@ -55,12 +59,24 @@ public class PspHttpClient {
                 throw new PspTemporaryException(
                         "El PSP devolvió un error temporal HTTP " + status.value(), exception);
             }
-            throw new PspBusinessException(
+            throw new PspBusinessException(status.value(),
                     "El PSP rechazó la solicitud con HTTP " + status.value(), exception);
         } catch (ResourceAccessException exception) {
-            throw new PspNetworkException("No fue posible comunicarse con el PSP", exception);
+            throw new PspNetworkException(
+                    "No fue posible comunicarse con el PSP", requestMayHaveReachedPsp(exception), exception);
         } catch (RestClientException exception) {
             throw new PspTemporaryException("Falló la invocación HTTP al PSP", exception);
         }
+    }
+
+    private static boolean requestMayHaveReachedPsp(Throwable exception) {
+        for (Throwable current = exception; current != null; current = current.getCause()) {
+            if (current instanceof ConnectException
+                    || current instanceof HttpConnectTimeoutException
+                    || current instanceof UnknownHostException) {
+                return false;
+            }
+        }
+        return true;
     }
 }

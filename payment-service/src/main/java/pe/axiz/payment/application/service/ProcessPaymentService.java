@@ -1,5 +1,6 @@
 package pe.axiz.payment.application.service;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -23,7 +24,7 @@ public class ProcessPaymentService implements ProcessPaymentUseCase {
     @Override
     public PaymentResult process(ProcessPaymentCommand command) {
         Payment payment = new Payment(
-                UUID.randomUUID(),
+                paymentIdFor(command.idempotencyKey()),
                 command.merchantId(),
                 new Money(command.amount(), command.currency()),
                 command.idempotencyKey());
@@ -45,5 +46,13 @@ public class ProcessPaymentService implements ProcessPaymentUseCase {
                 providerResult.providerReference(),
                 providerResult.replayed(),
                 providerResult.detail());
+    }
+
+    /**
+     * Sin persistencia, el identificador se deriva de la clave de idempotencia para que un reintento
+     * del cliente con la misma clave apunte al mismo pago lógico.
+     */
+    private static UUID paymentIdFor(String idempotencyKey) {
+        return UUID.nameUUIDFromBytes(("payment:" + idempotencyKey).getBytes(StandardCharsets.UTF_8));
     }
 }

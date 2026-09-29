@@ -16,6 +16,7 @@ public class ResilienceEventConfiguration {
             "pspProgrammaticAttempt",
             "pspProgrammaticRequest",
             "pspDeclarative");
+    private static final String PROVIDER_RATE_LIMITER = "pspProvider";
 
     public ResilienceEventConfiguration(
             CircuitBreakerRegistry circuitBreakerRegistry,
@@ -31,8 +32,6 @@ public class ResilienceEventConfiguration {
                     .onEvent(event -> journal.add("circuit-breaker", instance, event));
             retryRegistry.retry(instance).getEventPublisher()
                     .onEvent(event -> journal.add("retry", instance, event));
-            rateLimiterRegistry.rateLimiter(instance).getEventPublisher()
-                    .onEvent(event -> journal.add("rate-limiter", instance, event));
             bulkheadRegistry.bulkhead(instance).getEventPublisher()
                     .onEvent(event -> journal.add("semaphore-bulkhead", instance, event));
             threadPoolBulkheadRegistry.bulkhead(instance).getEventPublisher()
@@ -40,5 +39,7 @@ public class ResilienceEventConfiguration {
             timeLimiterRegistry.timeLimiter(instance).getEventPublisher()
                     .onEvent(event -> journal.add("time-limiter", instance, event));
         }
+        rateLimiterRegistry.rateLimiter(PROVIDER_RATE_LIMITER).getEventPublisher()
+                .onEvent(event -> journal.add("rate-limiter", PROVIDER_RATE_LIMITER, event));
     }
 }

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -v -E \"\\\\.\\(png|jpg\\)$\")",
+      "Bash(mvn -v)",
+      "Read(//c/Program Files/**)",
+      "Bash(docker version *)",
+      "Bash(java -version)",
+      "Bash(python /tmp/readme_update.py)",
+      "Bash(rm /tmp/readme_update.py)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

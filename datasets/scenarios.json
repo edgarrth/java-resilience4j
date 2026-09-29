@@ -68,5 +68,15 @@
     "failureRatePercent": 0,
     "failureStatus": 503,
     "retryAfterSeconds": 1
+  },
+  {
+    "name": "declined",
+    "fixedLatencyMs": 50,
+    "jitterMs": 0,
+    "failFirstCalls": 1000000,
+    "failureEveryN": 0,
+    "failureRatePercent": 0,
+    "failureStatus": 402,
+    "retryAfterSeconds": 0
   }
 ]

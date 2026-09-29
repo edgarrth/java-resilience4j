@@ -53,6 +53,7 @@ resilience4j:
           - pe.axiz.payment.adapter.out.psp.PspNetworkException
         ignoreExceptions:
           - pe.axiz.payment.adapter.out.psp.PspBusinessException
+          - pe.axiz.payment.adapter.out.psp.PspDeadlineExceededException
     instances:
       pspProgrammaticAttempt:
         baseConfig: psp-default
@@ -77,6 +78,7 @@ resilience4j:
           - pe.axiz.payment.adapter.out.psp.PspNetworkException
         ignoreExceptions:
           - pe.axiz.payment.adapter.out.psp.PspBusinessException
+          - pe.axiz.payment.adapter.out.psp.PspDeadlineExceededException
     instances:
       pspProgrammaticAttempt:
         baseConfig: psp-default
@@ -94,11 +96,8 @@ resilience4j:
         timeoutDuration: 100ms
         eventConsumerBufferSize: 100
     instances:
-      pspProgrammaticAttempt:
-        baseConfig: psp-default
-      pspProgrammaticRequest:
-        baseConfig: psp-default
-      pspDeclarative:
+      # La cuota pertenece al proveedor, no a la modalidad: todas las variantes comparten este limitador.
+      pspProvider:
         baseConfig: psp-default
 
   bulkhead:

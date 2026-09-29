@@ -16,7 +16,19 @@ public record PaymentProviderResult(
                 replayed ? "Respuesta idempotente reutilizada por el PSP" : "Pago autorizado por el PSP");
     }
 
+    public static PaymentProviderResult rejected(String detail) {
+        return new PaymentProviderResult(PaymentStatus.REJECTED, null, false, detail);
+    }
+
+    public static PaymentProviderResult idempotencyConflict(String detail) {
+        return new PaymentProviderResult(PaymentStatus.IDEMPOTENCY_CONFLICT, null, false, detail);
+    }
+
     public static PaymentProviderResult notProcessed(String detail) {
         return new PaymentProviderResult(PaymentStatus.NOT_PROCESSED, null, false, detail);
+    }
+
+    public static PaymentProviderResult unknown(String detail) {
+        return new PaymentProviderResult(PaymentStatus.UNKNOWN, null, false, detail);
     }
 }

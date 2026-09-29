@@ -6,12 +6,12 @@ import io.github.resilience4j.ratelimiter.annotation.RateLimiter;
 import io.github.resilience4j.retry.annotation.Retry;
 import org.springframework.stereotype.Component;
 import pe.axiz.payment.application.port.out.PaymentProviderResult;
-import pe.axiz.payment.domain.model.Payment;
 
 @Component
 public class DeclarativeProtectedPspCall {
 
     static final String INSTANCE = "pspDeclarative";
+    static final String PROVIDER_RATE_LIMITER = "pspProvider";
 
     private final PspHttpClient pspHttpClient;
 
@@ -21,10 +21,9 @@ public class DeclarativeProtectedPspCall {
 
     @Retry(name = INSTANCE)
     @CircuitBreaker(name = INSTANCE)
-    @RateLimiter(name = INSTANCE)
+    @RateLimiter(name = PROVIDER_RATE_LIMITER)
     @Bulkhead(name = INSTANCE, type = Bulkhead.Type.SEMAPHORE)
-    public PaymentProviderResult execute(Payment payment) {
-        var response = pspHttpClient.authorize(payment);
-        return PaymentProviderResult.authorized(response.authorizationId(), response.replayed());
+    public PaymentProviderResult execute(PspInvocation invocation) {
+        return invocation.attempt(pspHttpClient);
     }
 }

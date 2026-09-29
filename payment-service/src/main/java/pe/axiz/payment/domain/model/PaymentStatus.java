@@ -2,5 +2,8 @@ package pe.axiz.payment.domain.model;
 
 public enum PaymentStatus {
     AUTHORIZED,
-    NOT_PROCESSED
+    REJECTED,
+    IDEMPOTENCY_CONFLICT,
+    NOT_PROCESSED,
+    UNKNOWN
 }

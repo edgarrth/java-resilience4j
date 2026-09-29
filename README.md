@@ -12,11 +12,11 @@ La parte importante del repositorio es el comportamiento técnico de Resilience4
 | --- | --- |
 | Circuit Breaker | Estados `CLOSED`, `OPEN`, `HALF_OPEN`, `FORCED_OPEN`, `METRICS_ONLY` y `DISABLED`, failure rate y slow-call rate |
 | Retry | Reintentos selectivos para fallas temporales con exponential backoff + jitter |
-| Rate Limiter | Protección de la cuota del PSP y rechazo rápido cuando se agotan permisos |
+| Rate Limiter | Protección de la cuota del PSP, compartida por todas las modalidades, y rechazo rápido cuando se agotan permisos |
 | Semaphore Bulkhead | Límite de concurrencia sin crear otro pool de threads |
 | ThreadPool Bulkhead | Aislamiento con pool y cola propios para comparar el modelo de ejecución |
 | Time Limiter | Presupuesto máximo de tiempo para la operación hacia el PSP |
-| Fallback | Respuesta degradada segura: nunca invento una autorización si el PSP no confirmó el cobro |
+| Fallback | Respuesta degradada segura: nunca invento una autorización y distingo "no procesado" de "resultado desconocido" |
 | Cache | Cacheo metadatos del proveedor, no autorizaciones de pago |
 | Decorators | Composición programática para cambiar el orden de los patrones |
 | Annotations/AOP | Alternativa declarativa para comparar con la composición programática |
@@ -25,7 +25,7 @@ La parte importante del repositorio es el comportamiento técnico de Resilience4
 | Prometheus + Grafana | Scraping y dashboard listo para observar los experimentos |
 | Toxiproxy | Latencia, timeout, TCP reset y caída total del enlace |
 | Virtual Threads | El servicio usa virtual threads para trabajo bloqueante y el scheduler de timeouts queda separado |
-| Idempotencia | Todos los retries reutilizan el mismo `Idempotency-Key`; el PSP no crea dos autorizaciones para la misma clave |
+| Idempotencia | Todos los retries reutilizan el mismo `Idempotency-Key`; el PSP no crea dos autorizaciones para la misma clave y rechaza la clave reutilizada con otros datos |
 
 No uso PostgreSQL, Kafka, MongoDB, Neo4j, Qdrant, KurrentDB, InfluxDB ni Drools porque ninguno es necesario para demostrar este caso técnico. Meterlos haría la PoC más grande sin mejorar la prueba de resiliencia. Tampoco uso Flyway porque no existe una base de datos que versionar.
 
@@ -55,9 +55,12 @@ El cliente solicita una autorización de pago. `payment-service` crea el agregad
 El PSP puede estar saludable, lento, responder 429/503, fallar algunas veces o quedar inaccesible. La PoC aplica las políticas de resiliencia y devuelve:
 
 - `200 AUTHORIZED` únicamente cuando existe confirmación del PSP.
-- `503 NOT_PROCESSED` cuando se activa el fallback. Esto significa que el sistema no afirma que el pago fue autorizado.
+- `422 REJECTED` cuando el PSP rechaza la operación por negocio (4xx). Es una respuesta válida del proveedor: no se reintenta ni pasa por el fallback.
+- `409 IDEMPOTENCY_CONFLICT` cuando la `Idempotency-Key` ya se usó con otro comercio, importe o moneda.
+- `503 NOT_PROCESSED` cuando el fallback se activa y existe certeza de que el PSP no procesó el pago: Circuit Breaker abierto, Bulkhead lleno, cuota agotada, conexión rechazada o errores 429/5xx explícitos del PSP.
+- `202 UNKNOWN` cuando el fallback se activa pero la llamada pudo llegar al PSP: el TimeLimiter venció con un intento en vuelo o la conexión se cortó después de enviar el request. El PSP puede autorizar después de que el cliente recibió la respuesta, así que el sistema no afirma ni niega el cobro. El estado final se obtiene reenviando el mismo request con la misma `Idempotency-Key`.
 
-La idempotencia es parte central del ejemplo: un retry no genera un nuevo intento lógico de cobro. Todas las llamadas físicas del mismo request conservan el mismo `Idempotency-Key`.
+La idempotencia es parte central del ejemplo: un retry no genera un nuevo intento lógico de cobro. Todas las llamadas físicas del mismo request conservan el mismo `Idempotency-Key`, y el `paymentId` se deriva de esa clave para que un reintento del cliente apunte al mismo pago lógico.
 
 ## 4. Arquitectura
 
@@ -161,25 +164,40 @@ Fallback(TimeLimiter(CircuitBreaker(Retry(Bulkhead(RateLimiter(PSP))))))
 
 En ambos casos el Rate Limiter está dentro de Retry para que cada intento físico consuma permiso del proveedor. Eso evita que un request con tres retries se contabilice falsamente como un solo uso de cuota.
 
+El orden es el mismo con `isolation=SEMAPHORE` y con `isolation=THREAD_POOL`; solo cambia la implementación del eslabón `Bulkhead`. Con `ThreadPoolBulkhead` cada intento físico toma un hilo del pool y lo libera al terminar, así que la espera del backoff no ocupa hilos del pool.
+
+Cada request lógico crea un `PspInvocation` que comparten todos sus intentos físicos. Cumple dos funciones:
+
+- lleva la cuenta de los intentos en vuelo y de los cortes de red ambiguos, para que el fallback decida entre `NOT_PROCESSED` y `UNKNOWN`;
+- aplica un deadline igual al presupuesto del TimeLimiter. Cuando el TimeLimiter ya respondió al cliente, Retry todavía puede programar reintentos en segundo plano; esos intentos huérfanos se descartan antes de salir al PSP con `PspDeadlineExceededException`, que Retry y Circuit Breaker ignoran.
+
 ### 7.2 `DeclarativeProtectedPspCall` y `DeclarativeTimedPspCall`
 
 Muestran el equivalente con anotaciones `@Retry`, `@CircuitBreaker`, `@RateLimiter`, `@Bulkhead` y `@TimeLimiter`.
 
 `TimeLimiter` está en otro bean a propósito. Así la llamada pasa por el proxy AOP de Spring y evito el problema clásico de self-invocation.
 
+Con el orden de aspectos por defecto de Resilience4j, la cadena declarativa queda así:
+
+```text
+Fallback(TimeLimiter(Retry(CircuitBreaker(RateLimiter(Bulkhead(PSP))))))
+```
+
+Es decir, el Circuit Breaker declarativo registra cada intento físico, como `PER_ATTEMPT`. El fallback recibe el mismo `PspInvocation` que los intentos, así que aplica las mismas reglas de `NOT_PROCESSED`/`UNKNOWN` y el mismo deadline.
+
 ### 7.3 `PspHttpClient`
 
 Usa `RestClient` de Spring Framework 7 y el HTTP Client del JDK. Tiene connect/read timeout y clasifica errores:
 
 - HTTP `429` y `5xx`: `PspTemporaryException`, elegibles para Retry y Circuit Breaker.
-- errores de red: `PspNetworkException`, elegibles para Retry y Circuit Breaker.
-- otros `4xx`: `PspBusinessException`, no se reintentan y no deben degradar el Circuit Breaker.
+- errores de red: `PspNetworkException`, elegibles para Retry y Circuit Breaker. Además indica si el request pudo llegar al PSP: una conexión rechazada, un timeout de conexión o un host desconocido significan que nunca salió; un reset o un corte a mitad de la respuesta dejan el resultado en duda.
+- otros `4xx`: `PspBusinessException`, con el status HTTP. Los adaptadores la convierten en un resultado `REJECTED` (o `IDEMPOTENCY_CONFLICT` para `409`), por lo que no se reintenta, cuenta como llamada exitosa en el Circuit Breaker y nunca llega al fallback.
 
 ### 7.4 `PspSimulatorService`
 
-Permite cargar escenarios sin reiniciar el servicio. Los escenarios deterministas (`fail-first-two`, `unstable-every-two`, `unavailable`) son los que uso para pruebas repetibles. También existe `random-40` para experimentar con un patrón no determinista.
+Permite cargar escenarios sin reiniciar el servicio. Los escenarios deterministas (`fail-first-two`, `unstable-every-two`, `unavailable`) son los que uso para pruebas repetibles. También existe `random-40` para experimentar con un patrón no determinista, y `declined` para producir un rechazo de negocio (`402`).
 
-La idempotencia se implementa en memoria por `Idempotency-Key`. Si una autorización ya fue creada, una llamada posterior devuelve la misma referencia y `replayed=true`.
+La idempotencia se implementa en memoria por `Idempotency-Key`. Si una autorización ya fue creada y la nueva llamada trae el mismo comercio, importe y moneda, devuelve la misma referencia y `replayed=true`. Si la clave llega con otros datos responde `409 IDEMPOTENCY_CONFLICT`: devolver la autorización previa haría creer al cliente que se autorizó un importe que nunca se cobró.
 
 ### 7.5 `ProviderCapabilitiesCacheService`
 
@@ -215,8 +233,11 @@ La configuración está en `payment-service/src/main/resources/application.yml`.
 
 ### Rate Limiter
 
-- 10 permisos por segundo.
+- una sola instancia, `pspProvider`, compartida por las variantes programáticas y la declarativa: la cuota pertenece al proveedor, no a la modalidad.
+- 10 permisos por segundo en total contra el PSP.
 - espera máxima por permiso: 100 ms.
+
+Circuit Breaker, Retry, Bulkhead y TimeLimiter siguen teniendo una instancia por modalidad para poder comparar sus métricas por separado.
 
 ### Semaphore Bulkhead
 
@@ -298,7 +319,7 @@ Autorizado:
 }
 ```
 
-Fallback seguro:
+Fallback seguro con certeza de que el PSP no procesó el pago (`503`):
 
 ```json
 {
@@ -306,7 +327,19 @@ Fallback seguro:
   "status": "NOT_PROCESSED",
   "providerReference": null,
   "replayed": false,
-  "detail": "El pago no fue procesado. La protección de resiliencia terminó la llamada por TimeoutException"
+  "detail": "El pago no fue procesado. La protección de resiliencia terminó la llamada por CallNotPermittedException"
+}
+```
+
+Fallback con resultado desconocido (`202`), por ejemplo tras un timeout con un intento en vuelo:
+
+```json
+{
+  "paymentId": "11111111-2222-3333-4444-555555555555",
+  "status": "UNKNOWN",
+  "providerReference": null,
+  "replayed": false,
+  "detail": "Resultado desconocido: la llamada al PSP pudo completarse después de TimeoutException. Reintente con la misma Idempotency-Key para conocer el estado final"
 }
 ```
 
@@ -443,7 +476,8 @@ curl -i -X POST \
   -d '{"merchantId":"merchant-demo","amount":149.90,"currency":"PEN"}'
 ```
 
-Qué estoy comprobando: el request atraviesa RateLimiter, Bulkhead, Retry, Circuit Breaker y TimeLimiter sin activar protección. Debe responder `200` y `AUTHORIZED`.
+Qué estoy comprobando: el request atraviesa RateLimiter, Bulkhead, Retry, Circuit Breaker y TimeLimiter sin activar protección. 
+Debe responder `200` y `AUTHORIZED`.
 
 ### Test 2: Retry con backoff + idempotencia
 
@@ -564,7 +598,27 @@ curl -i -X POST \
   -d '{"merchantId":"merchant-demo","amount":20.00,"currency":"PEN"}'
 ```
 
-Qué estoy comprobando: el TimeLimiter está en 1500 ms y el PSP tarda 2 s. El cliente recibe `503 NOT_PROCESSED`; no devuelvo una autorización falsa.
+Qué estoy comprobando: el TimeLimiter está en 1500 ms y el PSP tarda 2 s. El cliente recibe `202 UNKNOWN`: no devuelvo una autorización falsa, pero tampoco afirmo que el pago no se procesó.
+
+Pasados 2 segundos reviso el PSP:
+
+```bash
+curl http://localhost:8081/admin/authorizations
+```
+
+La autorización `timeout-001` existe: el PSP autorizó después de que el TimeLimiter respondió al cliente. Si hubiera respondido `NOT_PROCESSED`, el cliente podría haber cobrado por otro medio y generado un doble cobro.
+
+Para conocer el estado final reenvío el mismo request con la misma clave:
+
+```bash
+curl -i -X POST \
+  'http://localhost:8080/api/v1/payments/programmatic?composition=PER_REQUEST&isolation=SEMAPHORE' \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: timeout-001' \
+  -d '{"merchantId":"merchant-demo","amount":20.00,"currency":"PEN"}'
+```
+
+La respuesta es `200 AUTHORIZED` con `replayed=true` y el mismo `paymentId`. El PSP responde el replay sin aplicar la latencia del escenario.
 
 Para revisar eventos:
 
@@ -586,7 +640,7 @@ seq 1 25 | xargs -P 25 -I {} curl -s -o /dev/null -w '%{http_code}\n' \
   -d '{"merchantId":"merchant-demo","amount":10.00,"currency":"PEN"}'
 ```
 
-Qué estoy comprobando: con 10 permisos/segundo y 100 ms de espera, parte del burst debe ser rechazado/protegido en lugar de dejar crecer una cola sin límite.
+Qué estoy comprobando: con 10 permisos/segundo y 100 ms de espera, parte del burst debe ser rechazado/protegido en lugar de dejar crecer una cola sin límite. La cuota es la misma para todas las modalidades: si durante el burst también llegan pagos por `PER_ATTEMPT` o por el endpoint declarativo, consumen de `pspProvider` (`providerRateLimiter` en el snapshot).
 
 ### Test 7: Semaphore Bulkhead
 
@@ -602,7 +656,7 @@ seq 1 12 | xargs -P 12 -I {} curl -s -o /dev/null -w '%{http_code}\n' \
   -d '{"merchantId":"merchant-demo","amount":10.00,"currency":"PEN"}'
 ```
 
-Qué estoy comprobando: solo 4 ejecuciones pueden ocupar el segmento protegido a la vez. El resto falla rápido por `BulkheadFullException` y termina en fallback.
+Qué estoy comprobando: solo 4 ejecuciones pueden ocupar el segmento protegido a la vez. El resto falla rápido por `BulkheadFullException` y termina en `503 NOT_PROCESSED`, porque nunca salió al PSP. Las 4 que entraron vencen el TimeLimiter con la llamada en vuelo y responden `202 UNKNOWN`.
 
 ### Test 8: ThreadPool Bulkhead
 
@@ -620,6 +674,14 @@ curl http://localhost:8080/internal/resilience/snapshot
 ```
 
 Qué estoy comprobando: el aislamiento ahora tiene pool de 2-4 threads y cola de 4. El snapshot permite ver tamaño del pool y profundidad/capacidad de la cola.
+
+Con `slow-2s` todavía activo desde el test anterior, el reparto esperado es:
+
+- 4 requests ocupan los threads y vencen el TimeLimiter en vuelo: `202 UNKNOWN`;
+- 4 quedan en la cola y el TimeLimiter vence antes de que empiecen: `503 NOT_PROCESSED`. Cuando obtienen un thread, el deadline ya venció y se descartan sin llamar al PSP;
+- 4 no entran ni en la cola: `503 NOT_PROCESSED` por `BulkheadFullException`.
+
+`GET :8081/admin/stats` muestra solo 4 llamadas nuevas en el PSP.
 
 ### Test 9: falla HTTP 429
 
@@ -658,7 +720,7 @@ Limpio:
 ./infrastructure/scripts/network-timeout.sh 4000
 ```
 
-Ejecuto un pago normal. El TimeLimiter debe terminar antes de que el enlace entregue la respuesta.
+Ejecuto un pago normal. El TimeLimiter debe terminar antes de que el enlace entregue la respuesta. El resultado es `202 UNKNOWN`: desde el cliente no hay forma de saber si el request llegó al PSP.
 
 ```bash
 ./infrastructure/scripts/network-reset.sh
@@ -670,7 +732,7 @@ Ejecuto un pago normal. El TimeLimiter debe terminar antes de que el enlace entr
 ./infrastructure/scripts/network-reset-peer.sh 0
 ```
 
-Ejecuto un pago y verifico que el error de transporte se clasifica como falla de red y es elegible para Retry.
+Ejecuto un pago y verifico que el error de transporte se clasifica como falla de red y es elegible para Retry. Como la conexión se establece y se corta después, el resultado final es `202 UNKNOWN`.
 
 ```bash
 ./infrastructure/scripts/network-reset.sh
@@ -682,7 +744,7 @@ Ejecuto un pago y verifico que el error de transporte se clasifica como falla de
 ./infrastructure/scripts/network-down.sh
 ```
 
-Hago varios pagos con claves diferentes y observo Retry + Circuit Breaker. Luego recupero el proxy:
+Hago varios pagos con claves diferentes y observo Retry + Circuit Breaker. Aquí la conexión se rechaza, así que hay certeza de que el request no salió y la respuesta es `503 NOT_PROCESSED`. Luego recupero el proxy:
 
 ```bash
 ./infrastructure/scripts/network-up.sh
@@ -751,6 +813,43 @@ curl http://localhost:8080/api/v1/payments/provider-capabilities/cache-metrics
 
 Qué estoy comprobando: la primera llamada es miss y consulta el PSP; la segunda reutiliza el valor. El campo `generatedAt` permite ver que la respuesta es la misma. Este patrón está limitado a metadata que tolera staleness.
 
+### Test 17: rechazo de negocio
+
+```bash
+curl -X POST http://localhost:8081/admin/reset
+curl -X POST http://localhost:8080/internal/resilience/circuit-breakers/pspProgrammaticRequest/reset
+curl -X POST http://localhost:8081/admin/scenarios/declined/activate
+curl -i -X POST \
+  'http://localhost:8080/api/v1/payments/programmatic?composition=PER_REQUEST&isolation=SEMAPHORE' \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: declined-001' \
+  -d '{"merchantId":"merchant-demo","amount":10.00,"currency":"PEN"}'
+curl http://localhost:8081/admin/stats
+curl http://localhost:8080/internal/resilience/snapshot
+```
+
+Qué estoy comprobando: el PSP responde `402` y el cliente recibe `422 REJECTED`, no `503`. Hay una sola llamada física porque un rechazo de negocio no se reintenta, y el Circuit Breaker no registra fallas: el PSP está sano, solo rechazó el pago.
+
+### Test 18: misma clave con otros datos
+
+```bash
+curl -X POST http://localhost:8081/admin/reset
+curl -X POST http://localhost:8081/admin/scenarios/healthy/activate
+curl -i -X POST \
+  'http://localhost:8080/api/v1/payments/programmatic?composition=PER_REQUEST&isolation=SEMAPHORE' \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: reuse-001' \
+  -d '{"merchantId":"merchant-demo","amount":10.00,"currency":"PEN"}'
+curl -i -X POST \
+  'http://localhost:8080/api/v1/payments/programmatic?composition=PER_REQUEST&isolation=SEMAPHORE' \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: reuse-001' \
+  -d '{"merchantId":"merchant-demo","amount":500.00,"currency":"PEN"}'
+curl http://localhost:8081/admin/authorizations
+```
+
+Qué estoy comprobando: el primer request autoriza 10.00. El segundo reutiliza la clave con 500.00 y recibe `409 IDEMPOTENCY_CONFLICT` en lugar de la autorización de 10.00. Ambos responden el mismo `paymentId` porque se deriva de la clave. Un reenvío idéntico al primero sí devuelve `200 AUTHORIZED` con `replayed=true`.
+
 ## 16. Observabilidad
 
 Prometheus:
@@ -792,15 +891,64 @@ curl http://localhost:8080/internal/resilience/snapshot
 curl http://localhost:8080/internal/resilience/events?limit=100
 ```
 
+### 16.1 Qué valida cada panel de Grafana
+
+El dashboard se refresca cada 5 segundos. Tiene siete paneles y cada uno sirve para confirmar visualmente el resultado de uno o varios tests de la sección 15:
+
+| Panel | Métrica | Qué puedo verificar | Tests |
+| --- | --- | --- | --- |
+| Circuit Breaker OPEN | `resilience4j_circuitbreaker_state{state="open"}` | El breaker pasa a `OPEN` tras el mínimo de llamadas con failure rate suficiente, y vuelve a 0 tras los 5 s más `HALF_OPEN`. Solo grafica el estado `open`: `FORCED_OPEN`, `HALF_OPEN` y `METRICS_ONLY` se consultan en Prometheus con `resilience4j_circuitbreaker_state` | 4, 13 |
+| Failure rate por Circuit Breaker | `resilience4j_circuitbreaker_failure_rate` | Diferencia entre `pspProgrammaticAttempt` (ve cada intento físico) y `pspProgrammaticRequest` (ve el resultado lógico). Un valor de `-1` significa que aún no hay el mínimo de 5 llamadas. En el rechazo de negocio se queda en 0 | 3, 4, 17 |
+| Retries | `resilience4j_retry_calls` (etiqueta `kind`) | `successful_with_retry` sube cuando `fail-first-two` se recupera; `failed_with_retry` cuando se agotan los 3 intentos; `failed_without_retry` con un `4xx` de negocio, que no se reintenta | 2, 9, 15, 17 |
+| TimeLimiter | `rate(resilience4j_timelimiter_calls_total[1m])` (etiqueta `kind`) | La serie `timeout` sube cuando el PSP tarda más de 1500 ms o el enlace tiene latencia/timeout de red. Esos requests son los que terminan en `202 UNKNOWN` | 5, 7, 10, 11 |
+| Bulkhead disponible | `resilience4j_bulkhead_available_concurrent_calls` | El semáforo baja de 4 a 0 bajo concurrencia con `slow-2s`. Solo cubre `isolation=SEMAPHORE` | 7 |
+| RateLimiter permisos | `resilience4j_ratelimiter_available_permissions` | Una sola serie, `pspProvider`, porque la cuota es compartida por todas las modalidades. Cae a 0 durante el burst y se recupera cada segundo | 6 |
+| PSP simulado por resultado | `rate(psp_simulator_requests_total[1m])` (etiqueta `result`) | Lo que realmente llegó al PSP: `authorized`, `failed`, `replayed` e `idempotency_conflict` | 2, 5, 7, 8, 17, 18 |
+
+Lo más útil es leer dos paneles a la vez:
+
+- **Retry no duplica cobros (Test 2):** en *Retries* aparece `successful_with_retry`, y en *PSP simulado* `failed` marca 2 y `authorized` marca 1. Tres llamadas físicas, una autorización.
+- **El breaker abierto protege al PSP (Test 4):** cuando *Circuit Breaker OPEN* pasa a 1, la tasa de *PSP simulado* cae a 0 aunque sigan llegando pagos. Los rechazos no llegan al proveedor.
+- **Bulkhead y deadline evitan llamadas de más (Tests 7 y 8):** las llamadas que el cliente vio como `503` por bulkhead lleno, o cuyo deadline ya venció, no aparecen en *PSP simulado*. Solo aparecen las que sí entraron.
+- **Timeout con autorización tardía (Test 5):** *TimeLimiter* marca `timeout`, pero *PSP simulado* muestra `authorized` unos 500 ms después. Es la evidencia de por qué el resultado es `UNKNOWN` y no `NOT_PROCESSED`.
+- **Rechazo de negocio (Test 17):** *PSP simulado* muestra `failed`, *Retries* muestra `failed_without_retry` y *Failure rate* se mantiene en 0.
+- **Clave reutilizada con otros datos (Test 18):** *PSP simulado* muestra `idempotency_conflict`.
+
+Qué no puedo ver en Grafana y debo verificar por otro medio:
+
+| Validación | Cómo verificarla |
+| --- | --- |
+| Estado final del pago (`UNKNOWN`, `REJECTED`, `NOT_PROCESSED`, `IDEMPOTENCY_CONFLICT`) | El código HTTP y el cuerpo de la respuesta del `curl`. No hay un contador por `PaymentStatus` |
+| Tamaño del pool y cola del `ThreadPoolBulkhead` (Test 8) | `GET /internal/resilience/snapshot`, sección `threadPoolBulkhead` |
+| Secuencia exacta de eventos y orden de composición | `GET /internal/resilience/events` |
+| Slow-call rate del Circuit Breaker | Consulta `resilience4j_circuitbreaker_slow_call_rate` en Prometheus; el dashboard no la grafica |
+| Que el PSP autorizó después del timeout | `GET :8081/admin/authorizations` |
+| Orden de composición de los adaptadores reales | `PspAdaptersIntegrationTest` (sección 17) |
+
+Las series de Resilience4j se distinguen por la etiqueta `name` (`pspProgrammaticAttempt`, `pspProgrammaticRequest`, `pspDeclarative`). Prometheus toma muestras cada 5 segundos y los paneles de tasa usan una ventana de 1 minuto, así que los tests cortos (Tests 1, 2 y 9) se ven como un pico pequeño. Conviene ejecutar el mismo test varias veces con claves distintas para que la serie sea visible.
+
 ## 17. Tests automatizados
 
 El repositorio incluye tests de:
 
 - invariantes del dominio `Money`;
-- selección del puerto hexagonal;
-- diferencia real entre `CircuitBreaker` por intento y por request;
-- idempotencia del PSP;
+- selección del puerto hexagonal y `paymentId` estable por clave de idempotencia;
+- mapeo de cada estado del pago a su código HTTP;
+- clasificación de errores de `PspHttpClient`: conexión rechazada vs. conexión cortada después de enviar;
+- diferencia entre `CircuitBreaker` por intento y por request, aislada con `Decorators`;
+- idempotencia del PSP, incluido el conflicto por clave reutilizada con otros datos;
 - escenario determinista `fail-first-two`.
+
+`PspAdaptersIntegrationTest` levanta el contexto de Spring con `application.yml` y prueba los adaptadores reales contra un PSP HTTP falso. Cubre las cinco rutas: `PER_ATTEMPT` y `PER_REQUEST` con `SEMAPHORE` y `THREAD_POOL`, más la declarativa. Verifica:
+
+- el orden de composición, a partir de las métricas del Circuit Breaker;
+- la misma `Idempotency-Key` en todos los intentos;
+- `UNKNOWN` con autorización tardía tras un timeout;
+- que los reintentos posteriores al timeout no salen al PSP;
+- `REJECTED` y `IDEMPOTENCY_CONFLICT` sin reintentos;
+- `NOT_PROCESSED` ante errores temporales;
+- `UNKNOWN` ante cortes de conexión;
+- la cuota compartida del Rate Limiter.
 
 Ejecución:
 
@@ -835,8 +983,10 @@ docker build -f psp-simulator/Dockerfile -t axiz/psp-simulator:local .
 - Circuit Breaker, Retry y timeout se calibran con SLOs y métricas reales, no copiando los números de esta demo.
 - No reintento errores de negocio.
 - Un retry de una operación de pago siempre conserva la misma clave idempotente.
-- El fallback nunca devuelve `AUTHORIZED` por inferencia.
-- El Rate Limiter considera llamadas físicas, no solo requests lógicos.
+- El fallback nunca devuelve `AUTHORIZED` por inferencia, y tampoco `NOT_PROCESSED` cuando la llamada pudo llegar al PSP: en ese caso responde `UNKNOWN` y el estado se resuelve consultando con la misma clave. En un servicio real, ese estado quedaría persistido y un proceso de reconciliación lo cerraría.
+- Un rechazo de negocio del PSP es una respuesta, no una falla: no pasa por el fallback ni degrada el Circuit Breaker.
+- Ningún reintento sale al proveedor después de que el cliente ya recibió respuesta.
+- El Rate Limiter considera llamadas físicas, no solo requests lógicos, y hay uno por proveedor: la cuota no se multiplica por cada variante de código que lo invoca.
 - Un Bulkhead se dimensiona por dependencia; no compartiría el mismo pool entre proveedores no relacionados.
 - Cache solo se usa para datos que toleran staleness. No se usa como mecanismo de idempotencia.
 - La observabilidad de los componentes forma parte de la implementación, no se deja para el final.

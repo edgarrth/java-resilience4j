@@ -26,6 +26,7 @@ public class PspSimulatorService {
     private final AtomicLong newAuthorizations = new AtomicLong();
     private final AtomicLong idempotentReplays = new AtomicLong();
     private final AtomicLong simulatedFailures = new AtomicLong();
+    private final AtomicLong idempotencyConflicts = new AtomicLong();
     private final MeterRegistry meterRegistry;
     private volatile String activeScenario = "healthy";
 
@@ -43,6 +44,7 @@ public class PspSimulatorService {
         long callNumber = totalCalls.incrementAndGet();
         Authorization existing = authorizationsByIdempotencyKey.get(idempotencyKey);
         if (existing != null) {
+            ensureSameOperation(existing, merchantId, amount, currency);
             idempotentReplays.incrementAndGet();
             counter("replayed").increment();
             return new AuthorizationResult(existing, true, callNumber, activeScenario);
@@ -70,6 +72,7 @@ public class PspSimulatorService {
         boolean replayed = winner != null;
         Authorization result = replayed ? winner : created;
         if (replayed) {
+            ensureSameOperation(winner, merchantId, amount, currency);
             idempotentReplays.incrementAndGet();
             counter("replayed").increment();
         } else {
@@ -124,6 +127,7 @@ public class PspSimulatorService {
                 "newAuthorizations", newAuthorizations.get(),
                 "idempotentReplays", idempotentReplays.get(),
                 "simulatedFailures", simulatedFailures.get(),
+                "idempotencyConflicts", idempotencyConflicts.get(),
                 "storedAuthorizations", authorizationsByIdempotencyKey.size());
     }
 
@@ -132,7 +136,23 @@ public class PspSimulatorService {
         newAuthorizations.set(0);
         idempotentReplays.set(0);
         simulatedFailures.set(0);
+        idempotencyConflicts.set(0);
         authorizationsByIdempotencyKey.clear();
+    }
+
+    private void ensureSameOperation(
+            Authorization existing,
+            String merchantId,
+            BigDecimal amount,
+            String currency) {
+
+        if (!existing.sameOperation(merchantId, amount, currency)) {
+            idempotencyConflicts.incrementAndGet();
+            counter("idempotency_conflict").increment();
+            throw new IdempotencyConflictException(
+                    "La Idempotency-Key '" + existing.idempotencyKey()
+                            + "' ya fue usada para otro comercio, importe o moneda");
+        }
     }
 
     private boolean mustFail(Scenario scenario, long callNumber) {

@@ -3,5 +3,5 @@
   "status": "NOT_PROCESSED",
   "providerReference": null,
   "replayed": false,
-  "detail": "El pago no fue procesado. La protección de resiliencia terminó la llamada por TimeoutException"
+  "detail": "El pago no fue procesado. La protección de resiliencia terminó la llamada por CallNotPermittedException"
 }

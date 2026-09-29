@@ -26,6 +26,7 @@ public class ResilienceAdminController {
             "pspProgrammaticAttempt",
             "pspProgrammaticRequest",
             "pspDeclarative");
+    private static final String PROVIDER_RATE_LIMITER = "pspProvider";
 
     private final CircuitBreakerRegistry circuitBreakerRegistry;
     private final RetryRegistry retryRegistry;
@@ -55,6 +56,11 @@ public class ResilienceAdminController {
         for (String instance : INSTANCES) {
             snapshot.put(instance, instanceSnapshot(instance));
         }
+        var rateMetrics = rateLimiterRegistry.rateLimiter(PROVIDER_RATE_LIMITER).getMetrics();
+        snapshot.put("providerRateLimiter", Map.of(
+                "name", PROVIDER_RATE_LIMITER,
+                "availablePermissions", rateMetrics.getAvailablePermissions(),
+                "waitingThreads", rateMetrics.getNumberOfWaitingThreads()));
         return snapshot;
     }
 
@@ -101,7 +107,6 @@ public class ResilienceAdminController {
         CircuitBreaker circuitBreaker = circuitBreakerRegistry.circuitBreaker(name);
         var circuitMetrics = circuitBreaker.getMetrics();
         var retryMetrics = retryRegistry.retry(name).getMetrics();
-        var rateMetrics = rateLimiterRegistry.rateLimiter(name).getMetrics();
         var bulkheadMetrics = bulkheadRegistry.bulkhead(name).getMetrics();
         var threadPoolMetrics = threadPoolBulkheadRegistry.bulkhead(name).getMetrics();
 
@@ -119,9 +124,6 @@ public class ResilienceAdminController {
                 "successWithRetry", retryMetrics.getNumberOfSuccessfulCallsWithRetryAttempt(),
                 "failureWithoutRetry", retryMetrics.getNumberOfFailedCallsWithoutRetryAttempt(),
                 "failureWithRetry", retryMetrics.getNumberOfFailedCallsWithRetryAttempt()));
-        result.put("rateLimiter", Map.of(
-                "availablePermissions", rateMetrics.getAvailablePermissions(),
-                "waitingThreads", rateMetrics.getNumberOfWaitingThreads()));
         result.put("semaphoreBulkhead", Map.of(
                 "availableConcurrentCalls", bulkheadMetrics.getAvailableConcurrentCalls(),
                 "maxAllowedConcurrentCalls", bulkheadMetrics.getMaxAllowedConcurrentCalls()));

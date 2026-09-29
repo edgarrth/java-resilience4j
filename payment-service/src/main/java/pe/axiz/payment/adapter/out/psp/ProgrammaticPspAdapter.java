@@ -1,8 +1,6 @@
 package pe.axiz.payment.adapter.out.psp;
 
-import io.github.resilience4j.bulkhead.Bulkhead;
 import io.github.resilience4j.bulkhead.BulkheadRegistry;
-import io.github.resilience4j.bulkhead.ThreadPoolBulkhead;
 import io.github.resilience4j.bulkhead.ThreadPoolBulkheadRegistry;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
@@ -18,8 +16,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Supplier;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import pe.axiz.payment.application.port.in.CompositionMode;
 import pe.axiz.payment.application.port.in.ExecutionStyle;
@@ -31,9 +27,9 @@ import pe.axiz.payment.domain.model.Payment;
 @Component
 public class ProgrammaticPspAdapter implements PaymentProviderPort {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(ProgrammaticPspAdapter.class);
     private static final String PER_ATTEMPT = "pspProgrammaticAttempt";
     private static final String PER_REQUEST = "pspProgrammaticRequest";
+    private static final String PROVIDER_RATE_LIMITER = "pspProvider";
 
     private final PspHttpClient pspHttpClient;
     private final CircuitBreakerRegistry circuitBreakerRegistry;
@@ -80,91 +76,54 @@ public class ProgrammaticPspAdapter implements PaymentProviderPort {
         String instanceName = compositionMode == CompositionMode.PER_ATTEMPT
                 ? PER_ATTEMPT
                 : PER_REQUEST;
-        return isolationMode == IsolationMode.THREAD_POOL
-                ? authorizeWithThreadPool(payment, compositionMode, instanceName)
-                : authorizeWithSemaphore(payment, compositionMode, instanceName);
-    }
-
-    private PaymentProviderResult authorizeWithSemaphore(
-            Payment payment,
-            CompositionMode compositionMode,
-            String instanceName) {
-
-        Supplier<CompletionStage<PaymentProviderResult>> source = () -> CompletableFuture.supplyAsync(
-                () -> invokePsp(payment), paymentVirtualThreadExecutor);
 
         CircuitBreaker circuitBreaker = circuitBreakerRegistry.circuitBreaker(instanceName);
         Retry retry = retryRegistry.retry(instanceName);
-        RateLimiter rateLimiter = rateLimiterRegistry.rateLimiter(instanceName);
-        Bulkhead bulkhead = bulkheadRegistry.bulkhead(instanceName);
         TimeLimiter timeLimiter = timeLimiterRegistry.timeLimiter(instanceName);
+        PspInvocation invocation = new PspInvocation(
+                payment, timeLimiter.getTimeLimiterConfig().getTimeoutDuration());
 
-        CompletionStage<PaymentProviderResult> stage = compositionMode == CompositionMode.PER_ATTEMPT
-                ? Decorators.ofCompletionStage(source)
-                        .withRateLimiter(rateLimiter)
-                        .withBulkhead(bulkhead)
-                        .withCircuitBreaker(circuitBreaker)
-                        .withRetry(retry, resilienceScheduler)
-                        .withTimeLimiter(timeLimiter, resilienceScheduler)
-                        .withFallback(this::fallback)
-                        .get()
-                : Decorators.ofCompletionStage(source)
-                        .withRateLimiter(rateLimiter)
-                        .withBulkhead(bulkhead)
-                        .withRetry(retry, resilienceScheduler)
-                        .withCircuitBreaker(circuitBreaker)
-                        .withTimeLimiter(timeLimiter, resilienceScheduler)
-                        .withFallback(this::fallback)
-                        .get();
+        // Mismo orden en ambas modalidades de aislamiento: cada intento físico pasa por
+        // Bulkhead y Rate Limiter, y solo cambia la posición del Circuit Breaker respecto de Retry.
+        Supplier<CompletionStage<PaymentProviderResult>> physicalAttempt = isolationMode == IsolationMode.THREAD_POOL
+                ? threadPoolIsolatedAttempt(invocation, instanceName)
+                : semaphoreIsolatedAttempt(invocation, instanceName);
 
-        return stage.toCompletableFuture().join();
+        var decorated = Decorators.ofCompletionStage(physicalAttempt);
+        decorated = compositionMode == CompositionMode.PER_ATTEMPT
+                ? decorated.withCircuitBreaker(circuitBreaker).withRetry(retry, resilienceScheduler)
+                : decorated.withRetry(retry, resilienceScheduler).withCircuitBreaker(circuitBreaker);
+
+        return decorated
+                .withTimeLimiter(timeLimiter, resilienceScheduler)
+                .withFallback(invocation::fallback)
+                .get()
+                .toCompletableFuture()
+                .join();
     }
 
-    private PaymentProviderResult authorizeWithThreadPool(
-            Payment payment,
-            CompositionMode compositionMode,
+    private Supplier<CompletionStage<PaymentProviderResult>> semaphoreIsolatedAttempt(
+            PspInvocation invocation,
             String instanceName) {
 
-        Supplier<PaymentProviderResult> source = () -> invokePsp(payment);
-
-        CircuitBreaker circuitBreaker = circuitBreakerRegistry.circuitBreaker(instanceName);
-        Retry retry = retryRegistry.retry(instanceName);
-        RateLimiter rateLimiter = rateLimiterRegistry.rateLimiter(instanceName);
-        ThreadPoolBulkhead bulkhead = threadPoolBulkheadRegistry.bulkhead(instanceName);
-        TimeLimiter timeLimiter = timeLimiterRegistry.timeLimiter(instanceName);
-
-        CompletionStage<PaymentProviderResult> stage = compositionMode == CompositionMode.PER_ATTEMPT
-                ? Decorators.ofSupplier(source)
-                        .withRateLimiter(rateLimiter)
-                        .withCircuitBreaker(circuitBreaker)
-                        .withRetry(retry)
-                        .withThreadPoolBulkhead(bulkhead)
-                        .withTimeLimiter(timeLimiter, resilienceScheduler)
-                        .withFallback(this::fallback)
-                        .get()
-                : Decorators.ofSupplier(source)
-                        .withRateLimiter(rateLimiter)
-                        .withRetry(retry)
-                        .withCircuitBreaker(circuitBreaker)
-                        .withThreadPoolBulkhead(bulkhead)
-                        .withTimeLimiter(timeLimiter, resilienceScheduler)
-                        .withFallback(this::fallback)
-                        .get();
-
-        return stage.toCompletableFuture().join();
+        return Decorators.ofCompletionStage(() -> CompletableFuture.supplyAsync(
+                        () -> invocation.attempt(pspHttpClient), paymentVirtualThreadExecutor))
+                .withRateLimiter(providerRateLimiter())
+                .withBulkhead(bulkheadRegistry.bulkhead(instanceName))
+                .decorate();
     }
 
-    private PaymentProviderResult invokePsp(Payment payment) {
-        var response = pspHttpClient.authorize(payment);
-        return PaymentProviderResult.authorized(response.authorizationId(), response.replayed());
+    private Supplier<CompletionStage<PaymentProviderResult>> threadPoolIsolatedAttempt(
+            PspInvocation invocation,
+            String instanceName) {
+
+        return Decorators.ofSupplier(() -> invocation.attempt(pspHttpClient))
+                .withRateLimiter(providerRateLimiter())
+                .withThreadPoolBulkhead(threadPoolBulkheadRegistry.bulkhead(instanceName))
+                .decorate();
     }
 
-    private PaymentProviderResult fallback(Throwable throwable) {
-        Throwable cause = RootCause.unwrap(throwable);
-        LOGGER.warn("Fallback controlado para PSP por {}: {}",
-                cause.getClass().getSimpleName(), cause.getMessage());
-        return PaymentProviderResult.notProcessed(
-                "El pago no fue procesado. La protección de resiliencia terminó la llamada por "
-                        + cause.getClass().getSimpleName());
+    private RateLimiter providerRateLimiter() {
+        return rateLimiterRegistry.rateLimiter(PROVIDER_RATE_LIMITER);
     }
 }

@@ -58,9 +58,17 @@ public class PaymentController {
     }
 
     private ResponseEntity<PaymentResponse> response(PaymentResult result) {
-        HttpStatus status = result.status() == PaymentStatus.AUTHORIZED
-                ? HttpStatus.OK
-                : HttpStatus.SERVICE_UNAVAILABLE;
-        return ResponseEntity.status(status).body(PaymentResponse.from(result));
+        return ResponseEntity.status(httpStatus(result.status())).body(PaymentResponse.from(result));
+    }
+
+    private static HttpStatus httpStatus(PaymentStatus status) {
+        return switch (status) {
+            case AUTHORIZED -> HttpStatus.OK;
+            // Aceptado pero sin estado final: el cliente consulta reenviando la misma Idempotency-Key.
+            case UNKNOWN -> HttpStatus.ACCEPTED;
+            case REJECTED -> HttpStatus.UNPROCESSABLE_CONTENT;
+            case IDEMPOTENCY_CONFLICT -> HttpStatus.CONFLICT;
+            case NOT_PROCESSED -> HttpStatus.SERVICE_UNAVAILABLE;
+        };
     }
 }

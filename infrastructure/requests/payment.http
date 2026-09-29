@@ -31,6 +31,17 @@ Idempotency-Key: demo-payment-003
   "currency": "PEN"
 }
 
+### Misma Idempotency-Key que demo-payment-001 con otro importe: el PSP responde conflicto (409)
+POST http://localhost:8080/api/v1/payments/programmatic?composition=PER_REQUEST&isolation=SEMAPHORE
+Content-Type: application/json
+Idempotency-Key: demo-payment-001
+
+{
+  "merchantId": "merchant-demo",
+  "amount": 999.90,
+  "currency": "PEN"
+}
+
 ### Pago declarativo con anotaciones Resilience4j
 POST http://localhost:8080/api/v1/payments/declarative
 Content-Type: application/json

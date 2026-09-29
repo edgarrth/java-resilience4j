@@ -32,6 +32,30 @@ class PspSimulatorServiceTest {
     }
 
     @Test
+    void unaMismaClaveConOtroImporteEsConflictoYNoDevuelveLaAutorizacionPrevia() {
+        service.authorize("idem-1", "merchant", new BigDecimal("10.00"), "PEN");
+
+        assertThatThrownBy(() -> service.authorize("idem-1", "merchant", new BigDecimal("500.00"), "PEN"))
+                .isInstanceOf(IdempotencyConflictException.class);
+        assertThatThrownBy(() -> service.authorize("idem-1", "other-merchant", new BigDecimal("10.00"), "PEN"))
+                .isInstanceOf(IdempotencyConflictException.class);
+        assertThatThrownBy(() -> service.authorize("idem-1", "merchant", new BigDecimal("10.00"), "USD"))
+                .isInstanceOf(IdempotencyConflictException.class);
+        assertThat(service.authorizations()).hasSize(1);
+        assertThat(service.stats()).containsEntry("idempotencyConflicts", 3L);
+    }
+
+    @Test
+    void laComparacionDeImporteIgnoraLaEscalaDecimal() {
+        var first = service.authorize("idem-1", "merchant", new BigDecimal("149.90"), "pen");
+        var second = service.authorize("idem-1", "merchant", new BigDecimal("149.9"), "PEN");
+
+        assertThat(second.replayed()).isTrue();
+        assertThat(second.authorization().authorizationId())
+                .isEqualTo(first.authorization().authorizationId());
+    }
+
+    @Test
     void failFirstTwoEsDeterminista() {
         service.importScenarios(List.of(new Scenario(
                 "fail-first-two", 0, 0, 2, 0, 0, 503, 1)));

@@ -9,6 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import pe.axiz.psp.application.IdempotencyConflictException;
 import pe.axiz.psp.application.SimulatedPspException;
 
 @RestControllerAdvice
@@ -22,6 +23,12 @@ public class PspExceptionHandler {
         }
         return new ResponseEntity<>(error(exception.status(), "SIMULATED_FAILURE", exception.getMessage()),
                 headers, HttpStatus.valueOf(exception.status()));
+    }
+
+    @ExceptionHandler(IdempotencyConflictException.class)
+    public ResponseEntity<Map<String, Object>> handleIdempotencyConflict(IdempotencyConflictException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(error(409, "IDEMPOTENCY_CONFLICT", exception.getMessage()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
